@@ -2966,6 +2966,7 @@ check_source() {
     # - $1 = package name
     # - $2 = expected MD5
     # - $3 = source file name
+    # - $4 = are we retrying
     # Returns 0 if the source is OK, 1 if the source should be (re)downloaded
     # (this includes the cases where $3 is empty or refers to a nonexistent
     # file) and 2 if the user asked to abort the build or 3 if the user
@@ -2987,7 +2988,43 @@ check_source() {
         fi
     else
         echo "$PKG not found in $SRCDIR."
-        return 1
+        if [[ $RETRY -eq 1 ]]; then
+            # Give the user a chance to use the alternative
+            # download if we already tried this and failed
+            while :; do
+                cat << EOF
+
+A previous attempt to download this file failed. Do you
+want to retry with an alternative download?
+
+You can choose among the following options:
+ - (N)o, abort the build process;
+ - (R)etry download using the default download url for this package; or
+ - (A)ttempt to download from third party source repository.
+EOF
+            printf "(N)o, (R)etry, (A)lternative ?: "
+            error_read
+            case $REPLY in 
+                N|n)
+                    echo "    Aborting build process." | tee -a $TMPSUMMARYLOG
+                    return 2
+                    ;;
+                R|r)
+                    echo "    Downloading again." | tee -a $TMPSUMMARYLOG
+                    return 1
+                    ;;
+                A|a)
+                    echo "    Searching source repository." | tee -a $TMPSUMMARYLOG
+                    return 3
+                    ;;
+                *)
+                    unknown_response
+                    ;;
+            esac
+        done
+        else
+            return 1
+        fi
     fi
 
     # Check MD5
@@ -3086,6 +3123,7 @@ get_source() {
     #
     # Parameters:
     # $1 = info file
+    # $2 = are we retrying
     #
     # Return values:
     # 0 = all ok
@@ -3100,6 +3138,7 @@ get_source() {
     local SRCNAME DL_SRCNAME DL FAILURE MD5CHK i CWD TWGETFLAGS WGETRC
     # Don't pollute the environment with the .info content...
     local PRGNAM VERSION HOMEPAGE DOWNLOAD MD5SUM MAINTAINER EMAIL APPROVED
+    local RETRY=$2
 
     CWD=$(pwd)
     read_info $INFO
@@ -3123,7 +3162,7 @@ get_source() {
                 done <<< $SRCNAME
             ) )"
 
-            check_source $PKG ${MD5SUM[$i]} "${SRCNAME[$i]}"
+            check_source $PKG ${MD5SUM[$i]} "${SRCNAME[$i]}" $RETRY
             case $? in
                 0 ) # Source OK
                     ln -sf "$SRCDIR/${SRCNAME[$i]}" \
@@ -3473,6 +3512,7 @@ process_package() {
     local PKGNAME=$2
     local RETVAL=0
     local REPLY
+    local RETRY=0
 
     echo
     echo "Processing $PKGNAME"
@@ -3499,7 +3539,7 @@ process_package() {
         # Note that get_source() "knows" about the source cache, so this isn't
         # necessarily a download.
         # If the sources are successfully fetched, start the build.
-        if get_source $PKGNAME.info.build; then
+        if get_source $PKGNAME.info.build $RETRY; then
             if [[ $QUEUETYPE == download ]]; then
                 echo "Done downloading source for $PKGBUILD."
                 return 1
@@ -3536,6 +3576,7 @@ process_package() {
                         break 2
                         ;;
                     R|r) # Retry
+                        RETRY=1
                         continue 2
                         ;;
                     *) unknown_response ;;
